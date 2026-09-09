@@ -1,0 +1,84 @@
+name: Build WYD Windows Server
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-wyd-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build DBSrv + TMSrv - Release Win32
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout PROJETO-WYD
+        uses: actions/checkout@v4
+
+      - name: Clone audited OpenWYD source
+        shell: pwsh
+        run: |
+          git clone https://github.com/Jean1dev/w2pp-OpenWYD.git OpenWYD
+          Set-Location OpenWYD
+          git checkout e6dc130812a392be81eb2451c5972617bc701830
+          $current = (git rev-parse HEAD).Trim()
+          if ($current -ne 'e6dc130812a392be81eb2451c5972617bc701830') {
+            throw "Commit incorreto: $current"
+          }
+          Write-Host "Commit confirmado: $current"
+
+      - name: Setup MSBuild Visual Studio 2022
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Show MSBuild
+        shell: pwsh
+        run: msbuild -version
+
+      - name: Build DBSrv - Release Win32
+        shell: pwsh
+        run: msbuild "OpenWYD\Source\Code\DBSrv\DBSrv.vcxproj" /m /t:Rebuild /p:Configuration=Release /p:Platform=Win32 /v:minimal
+
+      - name: Build TMSrv - Release Win32
+        shell: pwsh
+        run: msbuild "OpenWYD\Source\Code\TMSrv\TMSrv.vcxproj" /m /t:Rebuild /p:Configuration=Release /p:Platform=Win32 /v:minimal
+
+      - name: Verify executables
+        shell: pwsh
+        run: |
+          $db = "OpenWYD\Release\DBSRV\run\DBSrv.exe"
+          $tm = "OpenWYD\Release\TMSRV\run\TMSrv.exe"
+          if (!(Test-Path $db)) { throw "DBSrv.exe nao foi gerado" }
+          if (!(Test-Path $tm)) { throw "TMSrv.exe nao foi gerado" }
+          Write-Host "DBSrv.exe: OK"
+          Get-Item $db | Format-List FullName,Length,LastWriteTime
+          Write-Host "TMSrv.exe: OK"
+          Get-Item $tm | Format-List FullName,Length,LastWriteTime
+
+      - name: Prepare Windows server package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "artifact\Release" | Out-Null
+          Copy-Item -Recurse -Force "OpenWYD\Release\Common" "artifact\Release\Common"
+          Copy-Item -Recurse -Force "OpenWYD\Release\DBsrv" "artifact\Release\DBsrv"
+          Copy-Item -Recurse -Force "OpenWYD\Release\TMsrv" "artifact\Release\TMsrv"
+          Get-ChildItem "artifact" -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item -Force "OpenWYD\Release\DBSRV\run\DBSrv.exe" "artifact\Release\DBsrv\run\DBSrv.exe"
+          Copy-Item -Force "OpenWYD\Release\TMSRV\run\TMSrv.exe" "artifact\Release\TMsrv\run\TMsrv.exe"
+          @"
+          PROJETO WYD - WINDOWS SERVER BUILD
+          Fonte: Jean1dev/w2pp-OpenWYD
+          Commit: e6dc130812a392be81eb2451c5972617bc701830
+          Build: Windows GitHub Actions / VS2022 / Release|Win32
+          "@ | Set-Content -Encoding UTF8 "artifact\BUILD_INFO.txt"
+
+      - name: Upload compiled server
+        uses: actions/upload-artifact@v4
+        with:
+          name: PROJETO-WYD-WINDOWS-SERVER
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
